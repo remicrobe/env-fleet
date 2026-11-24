@@ -1,0 +1,13 @@
+html { overflow-y: auto !important; }
+.main-wrap { max-width: 1000px; margin: 0; }
+.mono textarea, pre.out { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+pre.out { margin: 0; padding: 10px 14px; max-height: 340px; overflow: auto; white-space: pre-wrap; word-break: break-word; border-top: 1px solid rgba(128, 128, 128, .3); }
+.diff-add { color: rgb(var(--v-theme-success)); }
+.diff-del { color: rgb(var(--v-theme-error)); }
+.row-e { padding-left: 14px !important; }
+.row-s { padding-left: 30px !important; }
+
+.term { height: calc(100vh - 130px); background: #111; padding: 6px; }
+.drop-target { outline: 2px dashed rgb(var(--v-theme-primary)); outline-offset: -2px; background: rgba(var(--v-theme-primary), .15); }
+.v-navigation-drawer { user-select: none; }
+.drag-ghost { position: fixed; z-index: 3000; pointer-events: none; padding: 4px 10px; border-radius: 14px; font-size: 12px; background: rgb(var(--v-theme-primary)); color: rgb(var(--v-theme-on-primary)); box-shadow: 0 2px 8px rgba(0,0,0,.4); white-space: nowrap; }

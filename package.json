@@ -1,0 +1,46 @@
+{
+  "name": "env-fleet",
+  "version": "0.1.0",
+  "description": "Gestionnaire graphique des fichiers .env d'une flotte de serveurs en SSH (import mRemoteNG, infos spécifiques par serveur, uniformisation, commandes en masse).",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win portable",
+    "dist:mac": "electron-builder --mac zip",
+    "dist:linux": "electron-builder --linux AppImage"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "fast-xml-parser": "^4.5.0",
+    "ssh2": "^1.16.0"
+  },
+  "devDependencies": {
+    "@mdi/font": "^7.4.47",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
+    "vue": "^3.5.46",
+    "vuetify": "^3.13.8"
+  },
+  "build": {
+    "appId": "com.envfleet.app",
+    "productName": "env-fleet",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**",
+      "renderer/**",
+      "package.json"
+    ],
+    "npmRebuild": false,
+    "nodeGypRebuild": false,
+    "win": {
+      "target": "portable",
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "env-fleet-portable.exe"
+    }
+  }
+}

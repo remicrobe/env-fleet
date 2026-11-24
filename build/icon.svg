@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b2a6b"/>
+      <stop offset="1" stop-color="#3b82f6"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".18"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="190" fill="url(#bg)"/>
+  <clipPath id="clip"><rect x="100" y="100" width="824" height="824" rx="190"/></clipPath>
+  <rect x="100" y="100" width="824" height="412" fill="url(#shine)" clip-path="url(#clip)"/>
+  <text x="512" y="520" text-anchor="middle" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-weight="800" font-size="300" fill="#ffffff" letter-spacing="-6">.env</text>
+  <g stroke="#9fe8c6" stroke-width="12" stroke-linecap="round" fill="none" opacity=".9">
+    <path d="M512 586 V640 M512 640 H312 V690 M512 640 H712 V690 M512 640 V690"/>
+  </g>
+  <g fill="#34d399" stroke="#ffffff" stroke-width="10">
+    <circle cx="312" cy="730" r="42"/>
+    <circle cx="512" cy="730" r="42"/>
+    <circle cx="712" cy="730" r="42"/>
+  </g>
+</svg>

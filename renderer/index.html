@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <!-- 'unsafe-eval' : Vue compile les templates au démarrage. Aucun contenu distant n'est chargé. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'; font-src 'self'; img-src 'self' data:">
+  <title>env-fleet</title>
+  <link rel="stylesheet" href="vendor/materialdesignicons.min.css">
+  <link rel="stylesheet" href="vendor/vuetify.min.css">
+  <link rel="stylesheet" href="vendor/xterm.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <v-app>
+    <!-- Verrouillage / création du coffre -->
+    <v-dialog :model-value="!unlocked" persistent max-width="420">
+      <v-card :title="vaultExists ? 'Déverrouiller' : 'Créer le coffre'" :subtitle="vaultExists ? 'Mot de passe maître' : 'Ce mot de passe chiffre tous les accès. Il ne peut pas être récupéré.'" class="pa-2">
+        <v-card-text>
+          <v-text-field v-model="pw" type="password" label="Mot de passe maître" autofocus @keyup.enter="submitLock"></v-text-field>
+          <v-text-field v-if="!vaultExists" v-model="pw2" type="password" label="Confirmer" @keyup.enter="submitLock"></v-text-field>
+          <div class="text-caption text-medium-emphasis">Données : {{ vaultDir }}</div>
+        </v-card-text>
+        <v-card-actions><v-spacer></v-spacer><v-btn color="primary" variant="flat" :loading="busy==='lock'" @click="submitLock">{{ vaultExists ? 'Déverrouiller' : 'Créer' }}</v-btn></v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <template v-if="unlocked">
+      <v-app-bar flat border density="comfortable">
+        <v-app-bar-title><b>env</b><span class="text-primary">-fleet</span></v-app-bar-title>
+        <v-btn prepend-icon="mdi-plus" @click="openServer(null)">Serveur</v-btn>
+        <v-btn prepend-icon="mdi-import" @click="openImport">Importer mRemoteNG</v-btn>
+        <v-btn prepend-icon="mdi-auto-fix" @click="openUniform">Uniformiser le .env</v-btn>
+        <v-btn prepend-icon="mdi-script-text" @click="view='commands'">Commandes en masse</v-btn>
+        <v-btn prepend-icon="mdi-console" @click="view='terminal'">Terminal</v-btn>
+        <v-menu>
+          <template #activator="{ props }"><v-btn v-bind="props" prepend-icon="mdi-share-variant">Partager</v-btn></template>
+          <v-list density="compact">
+            <v-list-item prepend-icon="mdi-export" title="Exporter (fichier chiffré)" @click="openShareExport"></v-list-item>
+            <v-list-item prepend-icon="mdi-import" title="Importer un partage" @click="openShareImport"></v-list-item>
+          </v-list>
+        </v-menu>
+        <v-menu>
+          <template #activator="{ props }"><v-btn v-bind="props" icon="mdi-palette" title="Thème"></v-btn></template>
+          <v-list density="compact">
+            <v-list-item v-for="m in themeModes" :key="m.value" :prepend-icon="m.icon" :title="m.title" :active="themeMode===m.value" @click="setTheme(m.value)"></v-list-item>
+          </v-list>
+        </v-menu>
+        <v-btn icon="mdi-lock" title="Verrouiller" @click="lockVault"></v-btn>
+      </v-app-bar>
+
+      <v-navigation-drawer permanent width="340">
+        <div class="pa-2">
+          <v-text-field v-model="filter" density="compact" variant="outlined" hide-details clearable prepend-inner-icon="mdi-magnify" placeholder="Rechercher…"></v-text-field>
+        </div>
+        <v-list density="compact" nav>
+          <v-list-item v-for="(r, i) in rows" :key="r.key" :data-i="i" :class="['row-' + r.kind, dragOver === r.key && 'drop-target']" @mousedown="e => dragDown(e, r)" @contextmenu.prevent="e => openCtx(e, r)" :active="r.kind==='s' && view==='server' && draft && draft.id===r.id" @click="rowClick(r)">
+            <template #prepend>
+              <v-checkbox-btn :model-value="checkState(r)==='all'" :indeterminate="checkState(r)==='some'" density="compact" @click.stop @update:model-value="v => toggle(r, v)"></v-checkbox-btn>
+            </template>
+            <v-list-item-title :class="r.kind==='p' ? 'font-weight-bold' : ''"><v-icon v-if="r.kind!=='s'" size="small" :icon="r.collapsed ? 'mdi-chevron-right' : 'mdi-chevron-down'"></v-icon> {{ r.label }}</v-list-item-title>
+            <v-list-item-subtitle v-if="r.sub">{{ r.sub }}</v-list-item-subtitle>
+            <template #append>
+              <span v-if="r.kind!=='s'" class="text-caption text-medium-emphasis">{{ r.ids.length }}</span>
+              <v-btn v-else icon="mdi-console" size="x-small" variant="text" title="Ouvrir un terminal" @click.stop="openTerminal(r.id)"></v-btn>
+            </template>
+          </v-list-item>
+          <div v-if="!rows.length" class="pa-4 text-medium-emphasis text-body-2">Aucun serveur. Ajoutez-en un ou importez un fichier mRemoteNG.</div>
+        </v-list>
+      </v-navigation-drawer>
+
+      <v-main>
+        <v-container fluid :class="view==='terminal' ? 'pa-2' : 'pa-6 main-wrap'">
+          <!-- Accueil -->
+          <div v-if="view==='server' && !draft">
+            <h2 class="text-h6 mb-2">env-fleet</h2>
+            <p class="text-medium-emphasis">Sélectionnez un serveur dans l’arbre, ou ajoutez-en un. Cochez des serveurs (ou un projet / type entier) pour les commandes en masse et l’uniformisation.</p>
+          </div>
+
+          <!-- Détail serveur -->
+          <div v-if="view==='server' && draft">
+            <h2 class="text-h6 mb-4">{{ isNew ? 'Nouveau serveur' : draft.name }}</h2>
+            <v-row dense>
+              <v-col cols="12" md="6"><v-text-field v-model="draft.name" label="Nom" density="comfortable"></v-text-field></v-col>
+              <v-col cols="12" md="6"><v-combobox v-model="draft.project" :items="projects" label="Projet" density="comfortable"></v-combobox></v-col>
+              <v-col cols="12" md="6"><v-combobox v-model="draft.env" :items="envTypes" label="Type d’environnement" density="comfortable"></v-combobox></v-col>
+              <v-col cols="12" md="6"><v-text-field v-model="draft.host" label="Hôte / IP" density="comfortable"></v-text-field></v-col>
+              <v-col cols="6" md="3"><v-text-field v-model.number="draft.port" type="number" label="Port" density="comfortable"></v-text-field></v-col>
+              <v-col cols="6" md="3"><v-text-field v-model="draft.username" label="Utilisateur" density="comfortable"></v-text-field></v-col>
+              <v-col cols="12" md="6"><v-select v-model="draft.authType" :items="authTypes" label="Authentification" density="comfortable"></v-select></v-col>
+              <v-col cols="12" v-if="draft.authType==='password' || draft.authType==='auto'"><v-text-field v-model="draft.password" :type="showPw ? 'text' : 'password'" :append-inner-icon="showPw ? 'mdi-eye-off' : 'mdi-eye'" @click:append-inner="showPw=!showPw" :label="draft.authType==='auto' ? 'Mot de passe (optionnel, en dernier recours)' : 'Mot de passe'" density="comfortable"></v-text-field></v-col>
+              <template v-if="draft.authType==='key'">
+                <v-col cols="12" md="6"><v-text-field v-model="draft.keyPath" label="Chemin de la clé privée (ex. ~/.ssh/id_ed25519)" density="comfortable"></v-text-field></v-col>
+                <v-col cols="12" md="6"><v-text-field v-model="draft.keyPassphrase" type="password" label="Passphrase (optionnel)" density="comfortable"></v-text-field></v-col>
+              </template>
+              <v-col cols="12" v-if="draft.authType==='agent'"><v-alert type="info" variant="tonal" density="compact">Utilise l’agent SSH du système (SSH_AUTH_SOCK, ou l’agent OpenSSH sous Windows).</v-alert></v-col>
+              <v-col cols="12"><v-text-field v-model="draft.envPath" label="Chemin du .env sur le serveur (ex. /var/www/app/.env)" density="comfortable"></v-text-field></v-col>
+            </v-row>
+
+            <div class="text-subtitle-1 mt-4">Infos spécifiques à ce serveur</div>
+            <div class="text-caption text-medium-emphasis mb-3">Variables dont la valeur diffère d’un serveur à l’autre (SERVER_ID, IS_JOB_SERVER…). « Appliquer mes infos » les réinjecte dans le .env.</div>
+            <v-row dense v-for="(v, i) in draft.vars" :key="i">
+              <v-col cols="12" md="4"><v-combobox v-model="v.key" :items="knownKeys" label="Clé" density="compact" hide-details></v-combobox></v-col>
+              <v-col cols="12" md="4">
+                <v-select v-if="v.type==='bool'" v-model="v.value" :items="['true','false']" label="Valeur" density="compact" hide-details></v-select>
+                <v-text-field v-else v-model="v.value" label="Valeur" density="compact" hide-details></v-text-field>
+              </v-col>
+              <v-col cols="8" md="3"><v-select :model-value="v.type || 'text'" @update:model-value="t => setVarType(v, t)" :items="[{title:'Texte',value:'text'},{title:'Booléen',value:'bool'}]" label="Type" density="compact" hide-details></v-select></v-col>
+              <v-col cols="4" md="1"><v-btn icon="mdi-delete" variant="text" color="error" @click="draft.vars.splice(i,1)"></v-btn></v-col>
+            </v-row>
+            <v-btn prepend-icon="mdi-plus" variant="tonal" class="mt-2" @click="draft.vars.push({key:'',value:'',type:'text'})">Ajouter une info</v-btn>
+
+            <div class="d-flex flex-wrap ga-2 mt-6">
+              <v-btn color="primary" variant="flat" :loading="busy==='save'" @click="run('save', save)">Enregistrer</v-btn>
+              <v-btn :loading="busy==='test'" @click="run('test', testConn)">Tester la connexion</v-btn>
+              <v-btn v-if="!isNew" prepend-icon="mdi-console" @click="run('term', () => openTerminal(draft.id))">Terminal</v-btn>
+              <v-btn v-if="!isNew" @click="duplicate">Dupliquer</v-btn>
+              <v-btn v-if="!isNew" color="error" variant="text" @click="run('del', removeServer)">Supprimer</v-btn>
+            </div>
+
+            <div class="text-subtitle-1 mt-8 mb-2">Fichier .env</div>
+            <div class="d-flex flex-wrap ga-2 mb-3">
+              <v-btn :loading="busy==='load'" @click="run('load', loadEnv)">Charger depuis le serveur</v-btn>
+              <v-btn @click="run('vars', applyVars)">Appliquer mes infos</v-btn>
+              <v-btn color="primary" variant="flat" :loading="busy==='write'" @click="run('write', writeEnv)">Enregistrer sur le serveur</v-btn>
+            </div>
+            <v-textarea v-model="envText" rows="16" auto-grow max-rows="30" variant="outlined" class="mono" spellcheck="false" placeholder="Cliquez sur « Charger depuis le serveur »"></v-textarea>
+          </div>
+
+          <!-- Terminal interactif -->
+          <div v-show="view==='terminal'">
+            <div v-if="!terms.length" class="pa-4 text-medium-emphasis">Aucun terminal ouvert. Cliquez sur l’icône terminal d’un serveur dans l’arbre (ou sur « Terminal » dans son détail) : c’est un vrai shell SSH, comme si vous vous connectiez à la main.</div>
+            <v-tabs v-model="activeTerm" density="compact" show-arrows>
+              <v-tab v-for="t in terms" :key="t.termId" :value="t.termId">{{ t.title }}<v-icon end size="small" icon="mdi-close" @click.stop="closeTerminal(t.termId)"></v-icon></v-tab>
+            </v-tabs>
+            <div v-for="t in terms" :key="t.termId" v-show="t.termId===activeTerm" :id="'t-' + t.termId" class="term"></div>
+          </div>
+
+          <!-- Commandes -->
+          <div v-if="view==='commands'">
+            <h2 class="text-h6 mb-2">Commandes sur plusieurs serveurs</h2>
+            <div class="text-caption text-medium-emphasis mb-3">{{ checkedServers.length ? 'Cibles : ' + checkedServers.map(s => s.name).join(', ') : 'Cochez des serveurs (ou un projet / type entier) dans l’arbre.' }}</div>
+            <v-textarea v-model="cmd" rows="3" auto-grow variant="outlined" class="mono" spellcheck="false" placeholder="ex. uptime   |   pm2 status   |   grep SERVER_ID /var/www/app/.env"></v-textarea>
+            <div class="d-flex flex-wrap align-center ga-3">
+              <v-btn color="primary" variant="flat" :disabled="running" @click="run('exec', execAll)">Exécuter sur {{ checkedServers.length }} serveur(s)</v-btn>
+              <v-btn :disabled="!running" @click="cancelRun">Annuler</v-btn>
+              <v-select v-model="histPick" :items="history" label="Historique" density="compact" hide-details style="max-width:320px" clearable @update:model-value="v => v && (cmd = v)"></v-select>
+              <v-switch v-model="login" label="Shell de login (nvm/PATH)" density="compact" hide-details color="primary"></v-switch>
+              <v-text-field v-model.number="timeoutSec" type="number" label="Délai (s)" density="compact" hide-details style="max-width:110px"></v-text-field>
+            </div>
+            <v-card v-for="id in runIds" :key="id" class="mt-4" variant="outlined">
+              <v-card-title class="d-flex align-center text-subtitle-1">{{ serverName(id) }}<v-spacer></v-spacer><v-chip size="small" :color="results[id].color">{{ results[id].badge }}</v-chip></v-card-title>
+              <pre class="out"><span v-for="(p, k) in results[id].parts" :key="k" :class="p.t==='err' ? 'text-error' : ''">{{ p.s }}</span></pre>
+            </v-card>
+          </div>
+        </v-container>
+      </v-main>
+
+      <!-- Import mRemoteNG -->
+      <v-dialog v-model="imp.show" max-width="760" scrollable>
+        <v-card title="Importer un fichier mRemoteNG">
+          <v-card-text>
+            <template v-if="!imp.data">
+              <p class="text-body-2 mb-4">Fichier confCons.xml. Seules les connexions SSH sont importées. Dossier de 1er niveau = projet, 2e niveau = type d’environnement.</p>
+              <v-text-field v-model="imp.pw" type="password" label="Mot de passe maître mRemoteNG (vide = défaut)"></v-text-field>
+            </template>
+            <template v-else>
+              <v-alert :type="imp.data.stats.passwordFailed ? 'warning' : 'info'" variant="tonal" density="compact" class="mb-3">
+                {{ imp.data.servers.length }} serveur(s) SSH sur {{ imp.data.stats.total }} connexion(s) ({{ imp.data.stats.skippedProtocol }} non SSH ignorée(s))<span v-if="imp.data.stats.passwordFailed"> — {{ imp.data.stats.passwordFailed }} mot(s) de passe non déchiffré(s) : mauvais mot de passe maître ?</span>
+              </v-alert>
+              <v-list density="compact" border rounded>
+                <v-list-item v-for="(s, i) in imp.data.servers" :key="i">
+                  <template #prepend><v-checkbox-btn v-model="imp.picks[i]"></v-checkbox-btn></template>
+                  <v-list-item-title>{{ s.project }} / {{ s.env }} / {{ s.name }}</v-list-item-title>
+                  <v-list-item-subtitle>{{ s.username }}@{{ s.host }}:{{ s.port }}</v-list-item-subtitle>
+                </v-list-item>
+              </v-list>
+              <p class="text-caption mt-3">Le chemin du .env est à renseigner ensuite sur chaque serveur (ou à dupliquer depuis un serveur déjà réglé).</p>
+            </template>
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer></v-spacer><v-btn @click="imp.show=false">Annuler</v-btn>
+            <v-btn v-if="!imp.data" color="primary" variant="flat" :loading="busy==='imp'" @click="run('imp', pickImport)">Choisir le fichier…</v-btn>
+            <v-btn v-else color="primary" variant="flat" @click="run('impok', confirmImport)">Importer la sélection</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+
+      <v-dialog v-model="shExp.show" max-width="520">
+        <v-card title="Exporter un partage chiffré">
+          <v-card-text>
+            <p class="text-body-2 mb-3">Le fichier .envfleet est chiffré (AES-256) avec le mot de passe ci-dessous. Communiquez-le au destinataire par un autre canal que le fichier.</p>
+            <v-radio-group v-model="shExp.scope" density="compact" hide-details class="mb-2">
+              <v-radio value="checked" :disabled="!checkedServers.length" :label="'Serveurs cochés (' + checkedServers.length + ')'"></v-radio>
+              <v-radio value="all" :label="'Tous les serveurs (' + servers.length + ')'"></v-radio>
+            </v-radio-group>
+            <v-switch v-model="shExp.secrets" color="warning" density="compact" hide-details label="Inclure les mots de passe et passphrases"></v-switch>
+            <div class="text-caption text-medium-emphasis mb-3">Désactivé : seuls hôtes, utilisateurs, chemins .env et infos spécifiques sont partagés.</div>
+            <v-text-field v-model="shExp.pw" type="password" label="Mot de passe de partage (8 caractères min.)"></v-text-field>
+            <v-text-field v-model="shExp.pw2" type="password" label="Confirmer le mot de passe"></v-text-field>
+          </v-card-text>
+          <v-card-actions><v-spacer></v-spacer><v-btn @click="shExp.show=false">Annuler</v-btn><v-btn color="primary" variant="flat" :disabled="!shExpCount" :loading="busy==='shexp'" @click="run('shexp', doShareExport)">Exporter {{ shExpCount }} serveur(s)…</v-btn></v-card-actions>
+        </v-card>
+      </v-dialog>
+
+      <v-dialog v-model="shImp.show" max-width="720" scrollable>
+        <v-card title="Importer un partage chiffré">
+          <v-card-text>
+            <template v-if="!shImp.data">
+              <p class="text-body-2 mb-3">Saisissez le mot de passe de partage, puis choisissez le fichier .envfleet.</p>
+              <v-text-field v-model="shImp.pw" type="password" label="Mot de passe de partage" autofocus></v-text-field>
+            </template>
+            <template v-else>
+              <v-list density="compact" border rounded>
+                <v-list-item v-for="(s, i) in shImp.data" :key="i">
+                  <template #prepend><v-checkbox-btn v-model="shImp.picks[i]"></v-checkbox-btn></template>
+                  <v-list-item-title>{{ s.project }} / {{ s.env }} / {{ s.name }}</v-list-item-title>
+                  <v-list-item-subtitle>{{ s.username }}@{{ s.host }}:{{ s.port }}</v-list-item-subtitle>
+                  <template #append><v-chip size="small" :color="s.existing ? 'warning' : 'success'">{{ s.existing ? 'remplace l’existant' : 'nouveau' }}</v-chip></template>
+                </v-list-item>
+              </v-list>
+            </template>
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer></v-spacer><v-btn @click="shImp.show=false">Annuler</v-btn>
+            <v-btn v-if="!shImp.data" color="primary" variant="flat" :loading="busy==='shimp'" @click="run('shimp', pickShare)">Choisir le fichier…</v-btn>
+            <v-btn v-else color="primary" variant="flat" @click="run('shok', confirmShare)">Importer la sélection</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+
+      <!-- Uniformiser -->
+      <v-dialog v-model="uni.show" max-width="1000" scrollable>
+        <v-card :title="'Uniformiser le .env de ' + uni.ids.length + ' serveur(s)'">
+          <v-card-text>
+            <p class="text-body-2 mb-4">Format : fins de ligne LF, pas d’espaces parasites, KEY=value, un seul saut de ligne entre blocs, un \n final. Avec une référence, l’ordre et le regroupement (sections, commentaires) de ce serveur sont repris ; les valeurs restent celles de chaque serveur. Rien n’est écrit avant votre validation.</p>
+            <v-select v-model="uni.ref" :items="uni.refItems" label="Serveur de référence" density="comfortable"></v-select>
+            <v-checkbox v-model="uni.withVars" label="Appliquer aussi les infos spécifiques de chaque serveur" density="compact" hide-details></v-checkbox>
+            <v-btn color="primary" variant="flat" class="my-3" :loading="busy==='plan'" @click="run('plan', planUniform)">Analyser (lecture seule)</v-btn>
+            <v-expansion-panels v-if="uni.plans" multiple variant="accordion">
+              <v-expansion-panel v-for="p in uni.plans" :key="p.id">
+                <v-expansion-panel-title>
+                  <v-checkbox-btn v-if="p.changed" :model-value="uni.picks.includes(p.id)" @click.stop @update:model-value="v => pickPlan(p.id, v)"></v-checkbox-btn>
+                  <span class="ml-2 font-weight-medium">{{ p.name }}</span><v-spacer></v-spacer>
+                  <v-chip size="small" :color="p.error ? 'error' : p.changed ? 'primary' : 'success'">{{ p.error ? 'erreur' : p.changed ? 'à modifier' : 'déjà uniforme' }}</v-chip>
+                </v-expansion-panel-title>
+                <v-expansion-panel-text>
+                  <div v-if="p.error" class="text-error">{{ p.error }}</div>
+                  <div v-for="(w, k) in (p.warnings || [])" :key="k" class="text-warning text-body-2">⚠ {{ w }}</div>
+                  <pre v-if="p.changed" class="out"><div v-for="(d, k) in p.diff" :key="k" :class="d.t==='+' ? 'diff-add' : d.t==='-' ? 'diff-del' : 'text-medium-emphasis'">{{ d.t==='…' ? '…' : d.t + ' ' + d.l }}</div></pre>
+                </v-expansion-panel-text>
+              </v-expansion-panel>
+            </v-expansion-panels>
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer></v-spacer><v-btn @click="uni.show=false">Fermer</v-btn>
+            <v-btn v-if="uni.plans" color="primary" variant="flat" :disabled="!uni.picks.length" :loading="busy==='apply'" @click="run('apply', applyUniform)">Appliquer ({{ uni.picks.length }})</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+    </template>
+
+    <v-menu v-model="ctx.show" :target="[ctx.x, ctx.y]" :close-on-content-click="true">
+      <v-list v-if="ctx.row" density="compact" min-width="240">
+        <v-list-subheader>{{ ctx.row.label }}</v-list-subheader>
+        <template v-if="ctx.row.kind==='s'">
+          <v-list-item prepend-icon="mdi-pencil" title="Ouvrir / modifier" @click="openServer(ctx.row.id)"></v-list-item>
+          <v-list-item prepend-icon="mdi-console" title="Ouvrir un terminal" @click="openTerminal(ctx.row.id)"></v-list-item>
+          <v-list-item prepend-icon="mdi-content-copy" title="Dupliquer" @click="ctxDuplicate"></v-list-item>
+        </template>
+        <template v-else>
+          <v-list-item prepend-icon="mdi-form-textbox" :title="ctx.row.kind==='p' ? 'Renommer le projet' : 'Renommer le type'" @click="ctxRename"></v-list-item>
+        </template>
+        <v-list-item prepend-icon="mdi-checkbox-marked-outline" :title="ctx.row.kind==='s' ? 'Cocher uniquement celui-ci' : 'Cocher uniquement ces ' + ctx.row.ids.length + ' serveurs'" @click="ctxCheckOnly"></v-list-item>
+        <v-list-item prepend-icon="mdi-script-text" title="Commande sur ces serveurs" @click="ctxCommands"></v-list-item>
+        <v-list-item prepend-icon="mdi-auto-fix" title="Uniformiser le .env" @click="ctxUniform"></v-list-item>
+        <v-divider></v-divider>
+        <v-list-item prepend-icon="mdi-delete" base-color="error" :title="ctx.row.kind==='s' ? 'Supprimer' : 'Supprimer ces ' + ctx.row.ids.length + ' serveurs'" @click="ctxDelete"></v-list-item>
+      </v-list>
+    </v-menu>
+
+    <v-dialog v-model="ren.show" max-width="420">
+      <v-card :title="ren.row && ren.row.kind==='p' ? 'Renommer le projet' : 'Renommer le type d’environnement'">
+        <v-card-text><v-text-field v-model="ren.value" label="Nouveau nom" autofocus @keyup.enter="confirmRename"></v-text-field></v-card-text>
+        <v-card-actions><v-spacer></v-spacer><v-btn @click="ren.show=false">Annuler</v-btn><v-btn color="primary" variant="flat" @click="confirmRename">Renommer</v-btn></v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <div v-if="ghost.show" class="drag-ghost" :style="{ left: ghost.x + 'px', top: ghost.y + 'px' }">{{ ghost.text }}</div>
+    <v-snackbar v-model="snack.show" :color="snack.color" :timeout="snack.timeout" location="bottom right" multi-line>
+      {{ snack.text }}
+      <template #actions><v-btn variant="text" @click="snack.show=false">OK</v-btn></template>
+    </v-snackbar>
+  </v-app>
+</div>
+<script src="vendor/vue.global.prod.js"></script>
+<script src="vendor/vuetify.min.js"></script>
+<script src="vendor/xterm.js"></script>
+<script src="vendor/addon-fit.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
