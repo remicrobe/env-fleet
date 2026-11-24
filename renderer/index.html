@@ -29,9 +29,11 @@
       <v-app-bar flat border density="comfortable">
         <v-app-bar-title><b>env</b><span class="text-primary">-fleet</span></v-app-bar-title>
         <v-btn prepend-icon="mdi-plus" @click="openServer(null)">Serveur</v-btn>
-        <v-btn prepend-icon="mdi-import" @click="openImport">Importer mRemoteNG</v-btn>
-        <v-btn prepend-icon="mdi-auto-fix" @click="openUniform">Uniformiser le .env</v-btn>
-        <v-btn prepend-icon="mdi-script-text" @click="view='commands'">Commandes en masse</v-btn>
+        <v-btn prepend-icon="mdi-import" @click="openImport">Importer</v-btn>
+        <v-btn prepend-icon="mdi-auto-fix" @click="openUniform">Uniformiser</v-btn>
+        <v-btn prepend-icon="mdi-pencil-box-multiple" @click="openBulk()">Variables</v-btn>
+        <v-btn prepend-icon="mdi-table-search" @click="openMatrix">Comparer</v-btn>
+        <v-btn prepend-icon="mdi-script-text" @click="view='commands'">Commandes</v-btn>
         <v-btn prepend-icon="mdi-console" @click="view='terminal'">Terminal</v-btn>
         <v-menu>
           <template #activator="{ props }"><v-btn v-bind="props" prepend-icon="mdi-share-variant">Partager</v-btn></template>
@@ -70,7 +72,7 @@
       </v-navigation-drawer>
 
       <v-main>
-        <v-container fluid :class="view==='terminal' ? 'pa-2' : 'pa-6 main-wrap'">
+        <v-container fluid :class="view==='terminal' ? 'pa-2' : view==='matrix' ? 'pa-4' : 'pa-6 main-wrap'">
           <!-- Accueil -->
           <div v-if="view==='server' && !draft">
             <h2 class="text-h6 mb-2">env-fleet</h2>
@@ -136,6 +138,31 @@
             <div v-for="t in terms" :key="t.termId" v-show="t.termId===activeTerm" :id="'t-' + t.termId" class="term"></div>
           </div>
 
+          <!-- Tableau comparatif -->
+          <div v-if="view==='matrix'">
+            <div class="d-flex flex-wrap align-center ga-3 mb-3">
+              <h2 class="text-h6">Comparer les .env</h2>
+              <v-btn color="primary" variant="flat" prepend-icon="mdi-refresh" :loading="busy==='matrix' || mx.loading" @click="run('matrix', loadMatrix)">{{ mx.loaded ? 'Actualiser' : 'Charger' }} ({{ checkedServers.length }} serveur(s) cochés)</v-btn>
+              <v-switch v-model="mx.onlyDiff" label="Seulement les différences" density="compact" hide-details color="primary"></v-switch>
+              <v-switch v-model="mx.secrets" label="Afficher les secrets" density="compact" hide-details color="warning"></v-switch>
+              <v-text-field v-model="mx.filter" density="compact" hide-details clearable placeholder="Filtrer les clés" prepend-inner-icon="mdi-magnify" style="max-width:240px"></v-text-field>
+            </div>
+            <div v-if="!mx.loaded" class="text-medium-emphasis">Cochez des serveurs (ou un projet / type entier) dans l’arbre, puis « Charger » : lecture seule, rien n’est modifié. Les valeurs en marge de la majorité sont surlignées ; « — » = variable absente.</div>
+            <template v-else>
+              <div class="text-caption text-medium-emphasis mb-2">{{ mxRows.length }} variable(s) affichée(s) sur {{ mx.rows.length }} · {{ mx.rows.filter(r => r.diff).length }} avec des différences<span v-if="mx.cols.some(c => c.error)"> · serveur(s) illisible(s) : {{ mx.cols.filter(c => c.error).map(c => c.name + ' (' + c.error + ')').join(' ; ') }}</span></div>
+              <div class="mx-scroll"><table class="mx">
+                <thead><tr><th class="mx-key">Variable</th><th v-for="c in mx.cols" :key="c.id" :class="c.error ? 'text-error' : ''">{{ c.name }}</th><th></th></tr></thead>
+                <tbody>
+                  <tr v-for="r in mxRows" :key="r.key">
+                    <td class="mx-key font-weight-medium">{{ r.key }}</td>
+                    <td v-for="c in mx.cols" :key="c.id" :class="[mxOdd(r, c) ? 'cell-odd' : '', r.values[c.id] === undefined ? 'text-medium-emphasis' : '']" :title="r.secret && !mx.secrets ? '' : r.values[c.id]">{{ mxText(r, c) }}</td>
+                    <td><v-btn icon="mdi-pencil" size="x-small" variant="text" title="Modifier cette variable sur ces serveurs" @click="mxEdit(r)"></v-btn></td>
+                  </tr>
+                </tbody>
+              </table></div>
+            </template>
+          </div>
+
           <!-- Commandes -->
           <div v-if="view==='commands'">
             <h2 class="text-h6 mb-2">Commandes sur plusieurs serveurs</h2>
@@ -145,7 +172,7 @@
               <v-btn color="primary" variant="flat" :disabled="running" @click="run('exec', execAll)">Exécuter sur {{ checkedServers.length }} serveur(s)</v-btn>
               <v-btn :disabled="!running" @click="cancelRun">Annuler</v-btn>
               <v-select v-model="histPick" :items="history" label="Historique" density="compact" hide-details style="max-width:320px" clearable @update:model-value="v => v && (cmd = v)"></v-select>
-              <v-switch v-model="login" label="Shell de login (nvm/PATH)" density="compact" hide-details color="primary"></v-switch>
+              <v-switch v-model="login" label="Charger le .bashrc (variables d’environnement)" density="compact" hide-details color="primary"></v-switch>
               <v-text-field v-model.number="timeoutSec" type="number" label="Délai (s)" density="compact" hide-details style="max-width:110px"></v-text-field>
             </div>
             <v-card v-for="id in runIds" :key="id" class="mt-4" variant="outlined">
@@ -229,6 +256,41 @@
         </v-card>
       </v-dialog>
 
+      <v-dialog v-model="bulk.show" max-width="1000" scrollable>
+        <v-card :title="'Modifier des variables sur ' + bulk.ids.length + ' serveur(s)'">
+          <v-card-text>
+            <p class="text-body-2 mb-4">Chaque opération est appliquée au .env de tous ces serveurs. Rien n’est écrit avant l’aperçu et votre validation. La valeur est écrite telle quelle (ajoutez les guillemets si nécessaire).</p>
+            <v-row dense v-for="(o, i) in bulk.ops" :key="i">
+              <v-col cols="12" md="4"><v-combobox v-model="o.key" :items="allKeys" label="Clé" density="compact" hide-details></v-combobox></v-col>
+              <v-col cols="12" md="3"><v-select v-model="o.action" :items="bulkActions" label="Action" density="compact" hide-details></v-select></v-col>
+              <v-col cols="10" md="4"><v-text-field v-model="o.value" :disabled="o.action==='delete'" label="Valeur" density="compact" hide-details></v-text-field></v-col>
+              <v-col cols="2" md="1"><v-btn icon="mdi-delete" variant="text" color="error" :disabled="bulk.ops.length===1" @click="bulk.ops.splice(i,1)"></v-btn></v-col>
+            </v-row>
+            <div class="d-flex ga-2 my-3">
+              <v-btn prepend-icon="mdi-plus" variant="tonal" @click="bulk.ops.push({ key: '', action: 'set', value: '' })">Ajouter une opération</v-btn>
+              <v-btn color="primary" variant="flat" :loading="busy==='bplan'" @click="run('bplan', planBulk)">Analyser (lecture seule)</v-btn>
+            </div>
+            <v-expansion-panels v-if="bulk.plans" multiple variant="accordion">
+              <v-expansion-panel v-for="p in bulk.plans" :key="p.id">
+                <v-expansion-panel-title>
+                  <v-checkbox-btn v-if="p.changed" :model-value="bulk.picks.includes(p.id)" @click.stop @update:model-value="v => pickBulk(p.id, v)"></v-checkbox-btn>
+                  <span class="ml-2 font-weight-medium">{{ p.name }}</span><v-spacer></v-spacer>
+                  <v-chip size="small" :color="p.error ? 'error' : p.changed ? 'primary' : 'success'">{{ p.error ? 'erreur' : p.changed ? p.warnings.join(' · ') : 'rien à changer' }}</v-chip>
+                </v-expansion-panel-title>
+                <v-expansion-panel-text>
+                  <div v-if="p.error" class="text-error">{{ p.error }}</div>
+                  <pre v-if="p.changed" class="out"><div v-for="(d, k) in p.diff" :key="k" :class="d.t==='+' ? 'diff-add' : d.t==='-' ? 'diff-del' : 'text-medium-emphasis'">{{ d.t==='…' ? '…' : d.t + ' ' + d.l }}</div></pre>
+                </v-expansion-panel-text>
+              </v-expansion-panel>
+            </v-expansion-panels>
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer></v-spacer><v-btn @click="bulk.show=false">Fermer</v-btn>
+            <v-btn v-if="bulk.plans" color="primary" variant="flat" :disabled="!bulk.picks.length" :loading="busy==='bapply'" @click="run('bapply', applyBulk)">Appliquer ({{ bulk.picks.length }})</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+
       <!-- Uniformiser -->
       <v-dialog v-model="uni.show" max-width="1000" scrollable>
         <v-card :title="'Uniformiser le .env de ' + uni.ids.length + ' serveur(s)'">
@@ -274,6 +336,8 @@
         <v-list-item prepend-icon="mdi-checkbox-marked-outline" :title="ctx.row.kind==='s' ? 'Cocher uniquement celui-ci' : 'Cocher uniquement ces ' + ctx.row.ids.length + ' serveurs'" @click="ctxCheckOnly"></v-list-item>
         <v-list-item prepend-icon="mdi-script-text" title="Commande sur ces serveurs" @click="ctxCommands"></v-list-item>
         <v-list-item prepend-icon="mdi-auto-fix" title="Uniformiser le .env" @click="ctxUniform"></v-list-item>
+        <v-list-item prepend-icon="mdi-pencil-box-multiple" title="Modifier une variable…" @click="ctxBulk"></v-list-item>
+        <v-list-item prepend-icon="mdi-table-search" title="Comparer les .env" @click="ctxMatrix"></v-list-item>
         <v-divider></v-divider>
         <v-list-item prepend-icon="mdi-delete" base-color="error" :title="ctx.row.kind==='s' ? 'Supprimer' : 'Supprimer ces ' + ctx.row.ids.length + ' serveurs'" @click="ctxDelete"></v-list-item>
       </v-list>

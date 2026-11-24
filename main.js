@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const Vault = require('./src/vault');
@@ -102,6 +102,29 @@ handle('env:plan', async ({ ids, referenceId, applyVars }) => {
   });
 });
 
+// Modifier / ajouter / supprimer des variables sur plusieurs serveurs : lecture + calcul, rien n'est écrit ici.
+handle('env:planOps', ({ ids, ops }) =>
+  mapLimit(ids, 6, async (id) => {
+    const s = getServer(id);
+    try {
+      const before = await ssh.readFile(s, hostStore);
+      const r = envfile.applyOps(before, ops);
+      return { id, name: s.name, changed: before !== r.content, warnings: r.changes, diff: envfile.diffContext(before, r.content), after: r.content };
+    } catch (err) {
+      return { id, name: s.name, error: err.message };
+    }
+  })
+);
+
+// Tableau comparatif : valeurs de toutes les variables de chaque serveur.
+handle('env:matrix', ({ ids }) =>
+  mapLimit(ids, 6, async (id) => {
+    const s = getServer(id);
+    try { return { id, name: s.name, vars: envfile.toMap(await ssh.readFile(s, hostStore)) }; }
+    catch (err) { return { id, name: s.name, error: err.message }; }
+  })
+);
+
 handle('env:apply', ({ items }) =>
   mapLimit(items, 6, async ({ id, content }) => {
     try { await ssh.writeFile(getServer(id), hostStore, content); return { id, ok: true }; }
@@ -113,7 +136,10 @@ handle('exec:run', async ({ runId, ids, command, login, timeoutSec }) => {
   const clients = new Set();
   runs.set(runId, clients);
   const send = (msg) => win && !win.isDestroyed() && win.webContents.send('exec:event', { runId, ...msg });
-  const cmd = login ? `bash -lc ${ssh.sq(command)}` : command;
+  // Shell interactif + login : charge ~/.bash_profile puis ~/.bashrc (variables d'environnement, nvm, PATH…).
+  // Sans pty, bash -i écrit des avertissements de contrôle de tâches : on les filtre.
+  const cmd = login ? `bash -lic ${ssh.sq(command)}` : command;
+  const NOISE = /^.*(cannot set terminal process group|no job control in this shell|Inappropriate ioctl for device).*\r?\n?/gm;
   await mapLimit(ids, 10, async (id) => {
     const s = getServer(id);
     send({ id, kind: 'start' });
@@ -121,7 +147,7 @@ handle('exec:run', async ({ runId, ids, command, login, timeoutSec }) => {
     try {
       c = await ssh.connect(s, hostStore);
       clients.add(c);
-      const r = await ssh.exec(c, cmd, { timeoutMs: (timeoutSec || 60) * 1000, onData: (k, d) => send({ id, kind: k, data: d }) });
+      const r = await ssh.exec(c, cmd, { timeoutMs: (timeoutSec || 60) * 1000, onData: (k, d) => { const t = k === 'err' && login ? d.replace(NOISE, '') : d; if (t) send({ id, kind: k, data: t }); } });
       send({ id, kind: 'end', code: r.code });
     } catch (err) {
       send({ id, kind: 'end', error: err.message });
@@ -152,6 +178,8 @@ handle('term:open', async ({ termId, id, cols, rows }) => {
     })
   );
 });
+handle('clipboard:read', () => clipboard.readText());
+handle('clipboard:write', ({ text }) => clipboard.writeText(String(text)));
 handle('term:write', ({ termId, data }) => { const t = terms.get(termId); if (t) t.stream.write(data); });
 handle('term:resize', ({ termId, cols, rows }) => { const t = terms.get(termId); if (t) t.stream.setWindow(rows, cols, 0, 0); });
 handle('term:close', ({ termId }) => { const t = terms.get(termId); if (t) { t.stream.close(); t.c.end(); terms.delete(termId); } });

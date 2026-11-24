@@ -125,31 +125,51 @@ function normalize(content, referenceContent) {
   return { content: render(out), warnings };
 }
 
-// Met à jour (ou ajoute en fin de fichier) des variables sans toucher au reste du fichier.
-function setVars(content, vars) {
+// Applique des opérations sur des variables sans toucher au reste du fichier.
+// ops : [{ key, action: 'set' | 'add' | 'delete', value }]
+//   set    = crée ou met à jour ; add = crée seulement si absente ; delete = supprime toutes les lignes de cette clé.
+function applyOps(content, ops) {
   const nl = String(content).includes('\r\n') ? '\r\n' : '\n';
   const lines = String(content).split(/\r?\n/);
   if (lines.length && lines[lines.length - 1] === '') lines.pop();
   const changes = [];
-  for (const v of vars || []) {
-    if (!v || !KEY_RE.test(v.key || '')) continue;
-    let idx = -1;
+  for (const op of ops || []) {
+    if (!op || !KEY_RE.test(op.key || '')) continue;
+    const action = op.action || 'set';
+    const idxs = [];
     lines.forEach((l, i) => {
       const m = KV.exec(l);
-      if (m && m[3] === v.key) idx = i;
+      if (m && m[3] === op.key) idxs.push(i);
     });
-    if (idx >= 0) {
-      const m = KV.exec(lines[idx]);
-      if (m[4].trim() !== String(v.value)) {
-        lines[idx] = `${m[1]}${m[2] || ''}${m[3]}=${v.value}`;
-        changes.push(`${v.key} : modifiée`);
+    if (action === 'delete') {
+      if (idxs.length) {
+        for (let k = idxs.length - 1; k >= 0; k--) lines.splice(idxs[k], 1);
+        changes.push(`${op.key} : supprimée`);
+      }
+    } else if (idxs.length) {
+      if (action === 'add') continue;
+      const i = idxs[idxs.length - 1];
+      const m = KV.exec(lines[i]);
+      if (m[4].trim() !== String(op.value)) {
+        lines[i] = `${m[1]}${m[2] || ''}${m[3]}=${op.value}`;
+        changes.push(`${op.key} : modifiée`);
       }
     } else {
-      lines.push(`${v.key}=${v.value}`);
-      changes.push(`${v.key} : ajoutée`);
+      lines.push(`${op.key}=${op.value}`);
+      changes.push(`${op.key} : ajoutée`);
     }
   }
+  if (!changes.length) return { content, changes };
   return { content: lines.length ? lines.join(nl) + nl : '', changes };
+}
+
+const setVars = (content, vars) => applyOps(content, (vars || []).map((v) => ({ key: v.key, value: v.value, action: 'set' })));
+
+// Clé -> valeur (la dernière occurrence gagne). Sert au tableau comparatif.
+function toMap(content) {
+  const out = {};
+  for (const e of parse(content)) if (e.type === 'kv') out[e.key] = e.value.trim();
+  return out;
 }
 
 // Diff ligne à ligne (LCS) avec `ctx` lignes de contexte. Retourne [{t:' '|'+'|'-'|'…', l}].
@@ -185,4 +205,4 @@ function diffContext(a, b, ctx = 2) {
   return res;
 }
 
-module.exports = { parse, render, normalize, setVars, diffContext, KEY_RE };
+module.exports = { parse, render, normalize, setVars, applyOps, toMap, diffContext, KEY_RE };

@@ -102,11 +102,10 @@ async function readFile(server, hostStore) {
   });
 }
 
-// Sauvegarde l'ancien fichier en <fichier>.bak-AAAAMMJJ-HHMMSS avant d'écrire (cat > conserve droits et propriétaire).
+// Écrit le fichier en place (cat > conserve droits et propriétaire). Aucune sauvegarde n'est créée sur le serveur.
 async function writeFile(server, hostStore, content) {
   if (!server.envPath) throw new Error('Chemin du .env non renseigné.');
-  const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14).replace(/^(\d{8})/, '$1-');
-  const cmd = `f=${quotePath(server.envPath)}; if [ -f "$f" ]; then cp -p "$f" "$f.bak-${ts}" || exit 1; fi; cat > "$f"`;
+  const cmd = `f=${quotePath(server.envPath)}; cat > "$f"`;
   return withClient(server, hostStore, async (c) => {
     let err = '';
     const r = await exec(c, cmd, { input: content, onData: (k, d) => k === 'err' && (err += d) });

@@ -5,7 +5,7 @@ Arbre **Projet → Type (PRODUCTION / DEVELOPMENT…) → Serveur**.
 
 ## Fonctions
 - Ajout manuel de serveurs (mot de passe, clé SSH + passphrase, ou agent SSH) et **import mRemoteNG** (`confCons.xml`, connexions SSH uniquement ; dossier 1er niveau = projet, 2e niveau = type).
-- Chemin du `.env` par serveur, lecture / édition / écriture via SSH (sauvegarde `.env.bak-AAAAMMJJ-HHMMSS` avant chaque écriture).
+- Chemin du `.env` par serveur, lecture / édition / écriture via SSH (aucune sauvegarde n'est créée sur le serveur : vérifier l'aperçu avant d'écrire).
 - **Infos spécifiques** par serveur (`SERVER_ID`, `IS_JOB_SERVER`…, texte ou booléen), réinjectées dans le `.env` sans toucher au reste du fichier.
 - **Uniformiser le .env** : nettoyage de format (LF, espaces, `KEY=value`, sauts de ligne) et, avec un serveur de référence, reprise de son ordre/regroupement/commentaires (les valeurs restent celles de chaque serveur). Aperçu diff avant toute écriture.
 - **Commandes en masse** sur les serveurs cochés, résultat par serveur en direct.

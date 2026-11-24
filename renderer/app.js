@@ -188,6 +188,8 @@ createApp({
     const ctxTarget = computed(() => (ctx.row ? ctx.row.ids : []));
     const ctxCheckOnly = () => { checked.value = [...ctxTarget.value]; };
     const ctxUniform = () => { ctxCheckOnly(); openUniform(); };
+    const ctxBulk = () => { ctxCheckOnly(); openBulk(ctxTarget.value); };
+    const ctxMatrix = () => { ctxCheckOnly(); mx.loaded = false; openMatrix(); };
     const ctxCommands = () => { ctxCheckOnly(); view.value = 'commands'; };
     const ctxDuplicate = () => run('dup', async () => {
       const c = clone(byId(ctx.row.id));
@@ -267,10 +269,73 @@ createApp({
     const writeEnv = async () => {
       if (!envText.value) throw new Error('Contenu vide : rien n’a été écrit.');
       await saveDraft();
-      if (!confirm(`Écrire ce contenu dans ${draft.value.envPath} sur ${draft.value.name} ? (sauvegarde .bak créée avant)`)) return;
+      if (!confirm(`Écrire ce contenu dans ${draft.value.envPath} sur ${draft.value.name} ?`)) return;
       await call('env:write', { id: draft.value.id, content: envText.value });
-      notify('.env écrit (sauvegarde .bak créée sur le serveur).', 'success');
+      notify('.env écrit.', 'success');
     };
+
+    // ----- modifier une variable sur plusieurs serveurs -----
+    const bulk = reactive({ show: false, ids: [], ops: [], plans: null, picks: [] });
+    const bulkActions = [{ title: 'Définir (créer ou modifier)', value: 'set' }, { title: 'Ajouter si absente', value: 'add' }, { title: 'Supprimer', value: 'delete' }];
+    const openBulk = (ids, firstOp) => {
+      const list = (ids || checked.value).filter((i) => byId(i));
+      if (!list.length) return notify('Cochez d’abord les serveurs concernés dans l’arbre.', 'warning');
+      Object.assign(bulk, { show: true, ids: list, plans: null, picks: [], ops: [firstOp || { key: '', action: 'set', value: '' }] });
+    };
+    const planBulk = async () => {
+      const ops = bulk.ops.filter((o) => o.key);
+      if (!ops.length) throw new Error('Renseignez au moins une clé.');
+      bulk.plans = null;
+      const plans = await call('env:planOps', { ids: bulk.ids, ops: ops.map((o) => ({ key: o.key.trim(), action: o.action, value: o.value })) });
+      bulk.plans = plans;
+      bulk.picks = plans.filter((p) => p.changed).map((p) => p.id);
+    };
+    const pickBulk = (id, v) => { bulk.picks = v ? [...new Set([...bulk.picks, id])] : bulk.picks.filter((i) => i !== id); };
+    const applyBulk = async () => {
+      const items = bulk.plans.filter((p) => bulk.picks.includes(p.id)).map((p) => ({ id: p.id, content: p.after }));
+      if (!confirm(`Écrire ${items.length} fichier(s) .env sur les serveurs ?`)) return;
+      const res = await call('env:apply', { items });
+      const bad = res.filter((r) => !r.ok);
+      if (bad.length) notify(`${res.length - bad.length} écrit(s), ${bad.length} échec(s) : ${bad.map((b) => `${serverName(b.id)} (${b.error})`).join(' ; ')}`, 'error');
+      else { notify(`${res.length} fichier(s) écrit(s).`, 'success'); bulk.show = false; }
+    };
+
+    // ----- tableau comparatif des variables -----
+    const SECRET_RE = /(PASS|SECRET|TOKEN|KEY|PWD|CREDENTIAL|PRIVATE)/i;
+    const mx = reactive({ loading: false, loaded: false, cols: [], rows: [], onlyDiff: true, filter: '', secrets: false });
+    const cellKey = (r, id) => (r.values[id] === undefined ? '\u0000missing' : r.values[id]);
+    const loadMatrix = async () => {
+      const ids = checked.value.filter((i) => byId(i));
+      if (!ids.length) throw new Error('Cochez d’abord les serveurs à comparer dans l’arbre.');
+      mx.loading = true;
+      try {
+        const res = await call('env:matrix', { ids });
+        const keys = new Set();
+        res.forEach((r) => r.vars && Object.keys(r.vars).forEach((k) => keys.add(k)));
+        mx.cols = res.map((r) => ({ id: r.id, name: r.name, error: r.error }));
+        mx.rows = [...keys].sort().map((key) => {
+          const values = {};
+          const count = new Map();
+          for (const r of res) {
+            if (r.error) continue;
+            values[r.id] = r.vars[key];
+            const k = r.vars[key] === undefined ? '\u0000missing' : r.vars[key];
+            count.set(k, (count.get(k) || 0) + 1);
+          }
+          let maj = null;
+          let best = -1;
+          for (const [k, n] of count) if (n > best) { best = n; maj = k; }
+          return { key, values, maj, diff: count.size > 1, secret: SECRET_RE.test(key) };
+        });
+        mx.loaded = true;
+      } finally { mx.loading = false; }
+    };
+    const mxRows = computed(() => mx.rows.filter((r) => (!mx.onlyDiff || r.diff) && (!mx.filter || r.key.toLowerCase().includes(mx.filter.toLowerCase()))));
+    const mxText = (r, c) => (c.error ? '?' : r.values[c.id] === undefined ? '—' : r.secret && !mx.secrets ? '••••••' : r.values[c.id]);
+    const mxOdd = (r, c) => r.diff && !c.error && cellKey(r, c.id) !== r.maj;
+    const mxEdit = (r) => openBulk(mx.cols.filter((c) => !c.error).map((c) => c.id), { key: r.key, action: 'set', value: '' });
+    const allKeys = computed(() => [...new Set([...knownKeys.value, ...mx.rows.map((r) => r.key)])]);
+    const openMatrix = () => { view.value = 'matrix'; if (checked.value.length && !mx.loaded) run('matrix', loadMatrix); };
 
     // ----- partage chiffré -----
     const shExp = reactive({ show: false, pw: '', pw2: '', secrets: false, scope: 'all' });
@@ -342,7 +407,7 @@ createApp({
     const pickPlan = (id, v) => { uni.picks = v ? [...new Set([...uni.picks, id])] : uni.picks.filter((i) => i !== id); };
     const applyUniform = async () => {
       const items = uni.plans.filter((p) => uni.picks.includes(p.id)).map((p) => ({ id: p.id, content: p.after }));
-      if (!confirm(`Écrire ${items.length} fichier(s) .env sur les serveurs ? Une sauvegarde .bak est créée avant chaque écriture.`)) return;
+      if (!confirm(`Écrire ${items.length} fichier(s) .env sur les serveurs ?`)) return;
       const res = await call('env:apply', { items });
       const bad = res.filter((r) => !r.ok);
       if (bad.length) notify(`${res.length - bad.length} écrit(s), ${bad.length} échec(s) : ${bad.map((b) => `${serverName(b.id)} (${b.error})`).join(' ; ')}`, 'error');
@@ -352,7 +417,7 @@ createApp({
     // ----- commandes en masse -----
     const cmd = ref('');
     const histPick = ref(null);
-    const login = ref(false);
+    const login = ref(true);
     const timeoutSec = ref(60);
     const results = reactive({});
     const runIds = ref([]);
@@ -411,6 +476,27 @@ createApp({
       fit.fit();
       instances.set(termId, { term, fit });
       term.onData((data) => bridge.invoke('term:write', { termId, data }));
+      // Copier / coller (la sélection xterm n'est pas une sélection DOM : le navigateur ne la voit pas).
+      const doCopy = async () => { await call('clipboard:write', { text: term.getSelection() }); term.clearSelection(); };
+      const doPaste = async () => { const text = await call('clipboard:read'); if (text) term.paste(text); };
+      const safe = (fn) => fn().catch((err) => notify(err.message, 'error')).finally(() => term.focus());
+      const isMac = navigator.platform.toLowerCase().includes('mac');
+      // Mac : Cmd+C / Cmd+V. Windows/Linux : Ctrl+Shift+C / Ctrl+Shift+V, et Ctrl+C copie seulement s'il y a une sélection
+      // (sinon il envoie l'interruption habituelle au serveur). Ctrl+V colle.
+      term.attachCustomKeyEventHandler((ev) => {
+        if (ev.type !== 'keydown') return true;
+        const k = ev.key.toLowerCase();
+        const copyKey = isMac ? ev.metaKey && !ev.ctrlKey && k === 'c' : ev.ctrlKey && k === 'c' && (ev.shiftKey || term.hasSelection());
+        const pasteKey = isMac ? ev.metaKey && !ev.ctrlKey && k === 'v' : ev.ctrlKey && k === 'v';
+        if (copyKey) { ev.preventDefault(); if (term.hasSelection()) safe(doCopy); return false; }
+        if (pasteKey) { ev.preventDefault(); safe(doPaste); return false; }
+        return true;
+      });
+      // Clic droit : copie la sélection s'il y en a une, sinon colle (comme Windows Terminal / PuTTY).
+      document.getElementById('t-' + termId).addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        safe(term.hasSelection() ? doCopy : doPaste);
+      });
       term.onResize(({ cols, rows }) => bridge.invoke('term:resize', { termId, cols, rows }));
       term.write(`Connexion à ${s.username}@${s.host}…\r\n`);
       try { await call('term:open', { termId, id, cols: term.cols, rows: term.rows }); term.focus(); }
@@ -436,9 +522,11 @@ createApp({
     return {
       themeMode, themeModes, setTheme,
       unlocked, vaultExists, vaultDir, pw, pw2, submitLock, lockVault, busy, run, snack,
+      bulk, bulkActions, openBulk, planBulk, pickBulk, applyBulk, allKeys,
+      mx, mxRows, loadMatrix, mxText, mxOdd, mxEdit, openMatrix,
       shExp, shImp, shExpCount, openShareExport, doShareExport, openShareImport, pickShare, confirmShare,
       rows, filter, rowClick, dragOver, dragDown, ghost,
-      ctx, ren, openCtx, ctxCheckOnly, ctxUniform, ctxCommands, ctxDuplicate, ctxDelete, ctxRename, confirmRename, checkState, toggle, checkedServers, serverName,
+      ctx, ren, openCtx, ctxBulk, ctxMatrix, ctxCheckOnly, ctxUniform, ctxCommands, ctxDuplicate, ctxDelete, ctxRename, confirmRename, checkState, toggle, checkedServers, serverName,
       view, draft, isNew, envText, showPw, authTypes, projects, envTypes, knownKeys,
       openServer, setVarType, duplicate, save, testConn, removeServer, loadEnv, applyVars, writeEnv,
       imp, openImport, pickImport, confirmImport,

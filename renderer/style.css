@@ -11,3 +11,12 @@ pre.out { margin: 0; padding: 10px 14px; max-height: 340px; overflow: auto; whit
 .drop-target { outline: 2px dashed rgb(var(--v-theme-primary)); outline-offset: -2px; background: rgba(var(--v-theme-primary), .15); }
 .v-navigation-drawer { user-select: none; }
 .drag-ghost { position: fixed; z-index: 3000; pointer-events: none; padding: 4px 10px; border-radius: 14px; font-size: 12px; background: rgb(var(--v-theme-primary)); color: rgb(var(--v-theme-on-primary)); box-shadow: 0 2px 8px rgba(0,0,0,.4); white-space: nowrap; }
+.mx td, .mx th { white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.mx td:not(.mx-key) { font-family: ui-monospace, Menlo, Consolas, monospace; }
+.mx .mx-key { position: sticky; left: 0; z-index: 1; background: rgb(var(--v-theme-surface)); }
+.mx thead .mx-key { z-index: 3; }
+.cell-odd { background: rgba(var(--v-theme-warning), .28); }
+.mx-scroll { overflow: auto; max-height: calc(100vh - 230px); border: 1px solid rgba(128, 128, 128, .3); border-radius: 6px; }
+table.mx { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; }
+table.mx th, table.mx td { padding: 5px 12px; border-bottom: 1px solid rgba(128, 128, 128, .2); text-align: left; }
+table.mx th { position: sticky; top: 0; z-index: 2; background: rgb(var(--v-theme-surface)); font-weight: 600; }
