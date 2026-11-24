@@ -157,9 +157,10 @@ handle('term:resize', ({ termId, cols, rows }) => { const t = terms.get(termId);
 handle('term:close', ({ termId }) => { const t = terms.get(termId); if (t) { t.stream.close(); t.c.end(); terms.delete(termId); } });
 
 app.whenReady().then(() => {
-  if (process.platform === 'darwin' && app.dock) app.dock.setIcon(path.join(__dirname, 'build', 'icon.png'));
+  const iconPath = path.join(__dirname, 'renderer', 'icon.png'); // dans le paquet (le dossier build/ n'y est pas)
+  if (process.platform === 'darwin' && app.dock) { try { app.dock.setIcon(iconPath); } catch { /* icône facultative */ } }
   win = new BrowserWindow({
-    width: 1280, height: 820, minWidth: 900, minHeight: 600, title: 'env-fleet', icon: path.join(__dirname, 'build', 'icon.png'),
+    width: 1280, height: 820, minWidth: 900, minHeight: 600, title: 'env-fleet', icon: iconPath,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   win.setMenuBarVisibility(false);
